@@ -18,35 +18,42 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. GOOGLE SHEETS SETUP ---
+# --- 1. GOOGLE SHEETS SETUP ---
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
-    try:
-        df = conn.read(worksheet="Sheet1", ttl=0)
-        df = df.dropna(how="all") 
-        df.fillna("", inplace=True) 
-        
-        # Enforce correct data types for math columns
-        df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(1).astype(int)
-        df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0)
-        
-        # Force text columns to strings
-        df['hidden_id'] = df['hidden_id'].astype(str)
-        df['Name'] = df['Name'].astype(str)
-        df['Status'] = df['Status'].astype(str)
-        df['Date'] = df['Date'].astype(str)
-        
-        # THE FIX: Convert Phone to string, strip the ".0" if Google Sheets added it, and clear 'nan'
-        df['Phone'] = df['Phone'].astype(str).str.replace(r'\.0$', '', regex=True).replace("nan", "")
-        
-        return df
-    except Exception:
-        return pd.DataFrame(columns=['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status'])
+    
+    # Read the sheet (ttl=0 forces a fresh pull every time)
+    df = conn.read(worksheet="Sheet1", ttl=0)
+    
+    expected_columns = ['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status']
+    
+    # If the sheet is brand new, it might be missing columns. This adds them safely.
+    for col in expected_columns:
+        if col not in df.columns:
+            df[col] = ""
+            
+    df = df.dropna(how="all") 
+    df.fillna("", inplace=True) 
+    
+    # Safely enforce data types without crashing
+    df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(1).astype(int)
+    df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0)
+    
+    df['hidden_id'] = df['hidden_id'].astype(str)
+    df['Name'] = df['Name'].astype(str)
+    df['Status'] = df['Status'].astype(str)
+    df['Date'] = df['Date'].astype(str)
+    
+    # Convert Phone to string, strip the ".0", and clear 'nan'
+    df['Phone'] = df['Phone'].astype(str).str.replace(r'\.0$', '', regex=True).replace("nan", "")
+    
+    # Return strictly the columns we want, in the right order
+    return df[expected_columns]
 
 def save_data(df):
     conn = st.connection("gsheets", type=GSheetsConnection)
     conn.update(worksheet="Sheet1", data=df)
-    st.cache_data.clear() 
-
+    st.cache_data.clear() # Forces Streamlit to forget old data
 # --- 2. STREAMLIT UI & NAVIGATION ---
 st.title("📦 Daily Shop Ledger")
 
