@@ -26,15 +26,21 @@ def get_data():
         df = df.dropna(how="all") # Drop completely empty rows Google Sheets sometimes adds
         df.fillna("", inplace=True) # Fix empty cells turning into "NaN"
         
-        # Enforce correct data types
+        # Enforce correct data types for math columns
         df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(1).astype(int)
         df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0)
+        
+        # --- THE FIX: Force text columns to be strictly strings ---
         df['hidden_id'] = df['hidden_id'].astype(str)
+        df['Phone'] = df['Phone'].astype(str).replace("nan", "") # Extra safeguard for empty cells
+        df['Name'] = df['Name'].astype(str)
+        df['Status'] = df['Status'].astype(str)
+        df['Date'] = df['Date'].astype(str)
+        
         return df
     except Exception:
         # If the sheet is empty or brand new, create the structure
         return pd.DataFrame(columns=['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status'])
-
 def save_data(df):
     conn = st.connection("gsheets", type=GSheetsConnection)
     conn.update(worksheet="Sheet1", data=df)
