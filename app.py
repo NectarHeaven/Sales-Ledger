@@ -18,42 +18,41 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 1. GOOGLE SHEETS SETUP ---
-# --- 1. GOOGLE SHEETS SETUP ---
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
-    
-    # Read the sheet (ttl=0 forces a fresh pull every time)
     df = conn.read(worksheet="Sheet1", ttl=0)
     
     expected_columns = ['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status']
     
-    # If the sheet is brand new, it might be missing columns. This adds them safely.
-    for col in expected_columns:
-        if col not in df.columns:
-            df[col] = ""
-            
+    # Safely handle completely empty sheets
+    if df is None or df.empty or len(df.columns) == 0:
+        df = pd.DataFrame(columns=expected_columns)
+    else:
+        for col in expected_columns:
+            if col not in df.columns:
+                df[col] = None 
+                
     df = df.dropna(how="all") 
-    df.fillna("", inplace=True) 
     
-    # Safely enforce data types without crashing
+    # 1. FIX THE NUMBERS FIRST 
     df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(1).astype(int)
-    df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0)
+    df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0).astype(float)
     
-    df['hidden_id'] = df['hidden_id'].astype(str)
-    df['Name'] = df['Name'].astype(str)
-    df['Status'] = df['Status'].astype(str)
-    df['Date'] = df['Date'].astype(str)
+    # 2. FIX THE TEXT SECOND
+    text_cols = ['hidden_id', 'Date', 'Name', 'Phone', 'Status']
+    for col in text_cols:
+        df[col] = df[col].fillna("").astype(str).replace("nan", "")
+        
+    # 3. Clean up the pesky phone .0
+    df['Phone'] = df['Phone'].str.replace(r'\.0$', '', regex=True)
     
-    # Convert Phone to string, strip the ".0", and clear 'nan'
-    df['Phone'] = df['Phone'].astype(str).str.replace(r'\.0$', '', regex=True).replace("nan", "")
-    
-    # Return strictly the columns we want, in the right order
     return df[expected_columns]
 
 def save_data(df):
     conn = st.connection("gsheets", type=GSheetsConnection)
     conn.update(worksheet="Sheet1", data=df)
-    st.cache_data.clear() # Forces Streamlit to forget old data
+    st.cache_data.clear() 
+
 # --- 2. STREAMLIT UI & NAVIGATION ---
 st.title("📦 Daily Shop Ledger")
 
@@ -111,7 +110,8 @@ if current_tab == "📊 Dashboard":
     
     t_col1.metric("Items Sold Today", int(t_qty))
     t_col2.metric("Revenue Today", f"₹{t_rev:.2f}")
-    st.dataframe(daily_df.drop(columns=['hidden_id'], errors='ignore'), use_container_width=True, hide_index=True)
+    if not daily_df.empty:
+        st.dataframe(daily_df.drop(columns=['hidden_id'], errors='ignore'), use_container_width=True, hide_index=True)
 
     st.divider()
 
@@ -127,7 +127,8 @@ if current_tab == "📊 Dashboard":
     
     y_col1.metric("Items Sold Yesterday", int(y_qty))
     y_col2.metric("Revenue Yesterday", f"₹{y_rev:.2f}")
-    st.dataframe(yest_df.drop(columns=['hidden_id'], errors='ignore'), use_container_width=True, hide_index=True)
+    if not yest_df.empty:
+        st.dataframe(yest_df.drop(columns=['hidden_id'], errors='ignore'), use_container_width=True, hide_index=True)
 
 # --- TAB 2: ADD ENTRY ---
 elif current_tab == "➕ Add Entry":
@@ -167,9 +168,11 @@ elif current_tab == "➕ Add Entry":
                     'Name': name, 
                     'Qty': final_qty, 
                     'Total Price': total_price, 
-                    'Phone': phone, 
+                    'Phone': phone.strip(), 
                     'Status': status
                 }
+                
+                # Fetch history, append, and save
                 df = get_data()
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(df)
@@ -210,7 +213,6 @@ elif current_tab == "✏️ Edit / Delete":
     else:
         df_sorted = df.sort_values(by='Date', ascending=False)
         
-        # Safe string formatting for the dropdown options
         edit_options_dict = {}
         for _, row in df_sorted.iterrows():
             phone_display = row['Phone'] if str(row['Phone']).strip() != '' else 'N/A'
@@ -248,7 +250,7 @@ elif current_tab == "✏️ Edit / Delete":
                         df.loc[df['hidden_id'] == target_id, 'Name'] = new_name
                         df.loc[df['hidden_id'] == target_id, 'Qty'] = new_qty
                         df.loc[df['hidden_id'] == target_id, 'Total Price'] = new_total
-                        df.loc[df['hidden_id'] == target_id, 'Phone'] = new_phone
+                        df.loc[df['hidden_id'] == target_id, 'Phone'] = str(new_phone).strip()
                         df.loc[df['hidden_id'] == target_id, 'Date'] = new_date
                         df.loc[df['hidden_id'] == target_id, 'Status'] = 'Borrowed' if str(new_phone).strip() != "" else 'Paid'
                         
