@@ -21,30 +21,31 @@ st.markdown("""
 def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     try:
-        # Read the sheet (ttl=0 ensures we always get live data)
         df = conn.read(worksheet="Sheet1", ttl=0)
-        df = df.dropna(how="all") # Drop completely empty rows Google Sheets sometimes adds
-        df.fillna("", inplace=True) # Fix empty cells turning into "NaN"
+        df = df.dropna(how="all") 
+        df.fillna("", inplace=True) 
         
         # Enforce correct data types for math columns
         df['Qty'] = pd.to_numeric(df['Qty'], errors='coerce').fillna(1).astype(int)
         df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0)
         
-        # --- THE FIX: Force text columns to be strictly strings ---
+        # Force text columns to strings
         df['hidden_id'] = df['hidden_id'].astype(str)
-        df['Phone'] = df['Phone'].astype(str).replace("nan", "") # Extra safeguard for empty cells
         df['Name'] = df['Name'].astype(str)
         df['Status'] = df['Status'].astype(str)
         df['Date'] = df['Date'].astype(str)
         
+        # THE FIX: Convert Phone to string, strip the ".0" if Google Sheets added it, and clear 'nan'
+        df['Phone'] = df['Phone'].astype(str).str.replace(r'\.0$', '', regex=True).replace("nan", "")
+        
         return df
     except Exception:
-        # If the sheet is empty or brand new, create the structure
         return pd.DataFrame(columns=['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status'])
+
 def save_data(df):
     conn = st.connection("gsheets", type=GSheetsConnection)
     conn.update(worksheet="Sheet1", data=df)
-    st.cache_data.clear() # Clear cache so next read is totally fresh
+    st.cache_data.clear() 
 
 # --- 2. STREAMLIT UI & NAVIGATION ---
 st.title("📦 Daily Shop Ledger")
@@ -130,7 +131,6 @@ elif current_tab == "➕ Add Entry":
         
         with col1:
             name = st.text_input("Item Name")
-            # FIXED: Box empties on click, uses 1 if left blank
             qty = st.number_input("Quantity", min_value=1, value=None, placeholder="1")
             date_input = st.date_input("Date", datetime.today())
             date_str = date_input.strftime('%Y-%m-%d') 
@@ -143,7 +143,7 @@ elif current_tab == "➕ Add Entry":
         
         if submitted:
             clean_phone = phone.replace(" ", "").replace("-", "").replace("+", "")
-            final_qty = qty if qty is not None else 1  # Treats empty qty as 1
+            final_qty = qty if qty is not None else 1
             
             if not name:
                 st.error("Item Name is required.")
@@ -203,7 +203,12 @@ elif current_tab == "✏️ Edit / Delete":
     else:
         df_sorted = df.sort_values(by='Date', ascending=False)
         
-        edit_options_dict = {f"{row['Date']} | {row['Name']} | Qty: {row['Qty']} | Phone: {row['Phone'] if str(row['Phone']).strip() != '' else 'N/A'}": row['hidden_id'] for _, row in df_sorted.iterrows()}
+        # Safe string formatting for the dropdown options
+        edit_options_dict = {}
+        for _, row in df_sorted.iterrows():
+            phone_display = row['Phone'] if str(row['Phone']).strip() != '' else 'N/A'
+            label = f"{row['Date']} | {row['Name']} | Qty: {row['Qty']} | Phone: {phone_display}"
+            edit_options_dict[label] = row['hidden_id']
         
         selected_edit = st.selectbox(
             "Search or Select entry to modify:", 
