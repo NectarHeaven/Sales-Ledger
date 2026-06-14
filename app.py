@@ -22,7 +22,6 @@ def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     df = conn.read(worksheet="Sheet1", ttl=0)
     
-    # Added 'Customer Name' to columns
     expected_columns = ['hidden_id', 'Date', 'Customer Name', 'Name', 'Qty', 'Total Price', 'Phone', 'Status']
     
     # Safely handle completely empty sheets
@@ -76,13 +75,19 @@ if current_tab == "📊 Dashboard":
     today_str = datetime.today().strftime('%Y-%m-%d')
     yesterday_str = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
     
-    # --- NEW SECTION: TOTAL OWE PER CUSTOMER ---
+    # --- FIXED SECTION: AGGREGATE STRICLY BASED ON PHONE ---
     st.header("💰 Total Outstanding Dues by Customer")
     if not df.empty:
         borrowed_all = df[df['Status'] == 'Borrowed']
         if not borrowed_all.empty:
-            # Group by Phone and Customer Name to aggregate money owed
-            owe_summary = borrowed_all.groupby(['Customer Name', 'Phone'])['Total Price'].sum().reset_index()
+            # Group strictly by Phone, sum the money, and grab the first associated name
+            owe_summary = borrowed_all.groupby('Phone').agg({
+                'Customer Name': 'first',
+                'Total Price': 'sum'
+            }).reset_index()
+            
+            # Reorder and rename columns for a cleaner UI display
+            owe_summary = owe_summary[['Customer Name', 'Phone', 'Total Price']]
             owe_summary.columns = ['Customer Name', 'Phone/Contact', 'Total Owed (₹)']
             owe_summary = owe_summary.sort_values(by='Total Owed (₹)', ascending=False)
             
