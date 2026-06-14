@@ -22,7 +22,8 @@ def get_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     df = conn.read(worksheet="Sheet1", ttl=0)
     
-    expected_columns = ['hidden_id', 'Date', 'Name', 'Qty', 'Total Price', 'Phone', 'Status']
+    # Added 'Customer Name' to columns
+    expected_columns = ['hidden_id', 'Date', 'Customer Name', 'Name', 'Qty', 'Total Price', 'Phone', 'Status']
     
     # Safely handle completely empty sheets
     if df is None or df.empty or len(df.columns) == 0:
@@ -39,7 +40,7 @@ def get_data():
     df['Total Price'] = pd.to_numeric(df['Total Price'], errors='coerce').fillna(0.0).astype(float)
     
     # 2. FIX THE TEXT SECOND
-    text_cols = ['hidden_id', 'Date', 'Name', 'Phone', 'Status']
+    text_cols = ['hidden_id', 'Date', 'Customer Name', 'Name', 'Phone', 'Status']
     for col in text_cols:
         df[col] = df[col].fillna("").astype(str).replace("nan", "")
         
@@ -75,6 +76,24 @@ if current_tab == "📊 Dashboard":
     today_str = datetime.today().strftime('%Y-%m-%d')
     yesterday_str = (datetime.today() - timedelta(days=1)).strftime('%Y-%m-%d')
     
+    # --- NEW SECTION: TOTAL OWE PER CUSTOMER ---
+    st.header("💰 Total Outstanding Dues by Customer")
+    if not df.empty:
+        borrowed_all = df[df['Status'] == 'Borrowed']
+        if not borrowed_all.empty:
+            # Group by Phone and Customer Name to aggregate money owed
+            owe_summary = borrowed_all.groupby(['Customer Name', 'Phone'])['Total Price'].sum().reset_index()
+            owe_summary.columns = ['Customer Name', 'Phone/Contact', 'Total Owed (₹)']
+            owe_summary = owe_summary.sort_values(by='Total Owed (₹)', ascending=False)
+            
+            st.dataframe(owe_summary, use_container_width=True, hide_index=True)
+        else:
+            st.info("No active debts! Everyone is settled up.")
+    else:
+        st.info("No ledger data available.")
+        
+    st.divider()
+
     st.header("🤝 Pending Borrowed Items")
     if not df.empty:
         borrowed_df = df[df['Status'] == 'Borrowed']
@@ -85,15 +104,15 @@ if current_tab == "📊 Dashboard":
         st.info("No outstanding borrowed items!")
     else:
         for _, row in borrowed_df.iterrows():
-            col1, col2, col3, col4 = st.columns([1.5, 3, 2, 1.5])
+            col1, col2, col3, col4 = st.columns([1.5, 3, 2.5, 1.5])
             col1.write(f"**{row['Date']}**")
-            col2.write(f"**{row['Name']}** (Qty: {row['Qty']})")
-            col3.write(f"📞 {row['Phone']} | **₹{row['Total Price']}**")
+            col2.write(f"👤 **{row['Customer Name']}** \n\n Item: {row['Name']} (Qty: {row['Qty']})")
+            col3.write(f"📞 {row['Phone']} \n\n **₹{row['Total Price']}**")
             
             if col4.button("✔️ Mark Paid", key=f"pay_{row['hidden_id']}", use_container_width=True):
                 df.loc[df['hidden_id'] == row['hidden_id'], 'Status'] = 'Paid'
                 save_data(df)
-                st.session_state.flash_success = f"Marked '{row['Name']}' as paid!"
+                st.session_state.flash_success = f"Marked entry for '{row['Customer Name']}' as paid!"
                 st.rerun()
 
     st.divider()
@@ -138,20 +157,22 @@ elif current_tab == "➕ Add Entry":
         col1, col2 = st.columns(2)
         
         with col1:
+            cust_name = st.text_input("Customer Name (Optional for direct cash sale)")
             name = st.text_input("Item Name")
             qty = st.number_input("Quantity", min_value=1, value=None, placeholder="1")
-            date_input = st.date_input("Date", datetime.today())
-            date_str = date_input.strftime('%Y-%m-%d') 
             
         with col2:
             total_price = st.number_input("Total Price (₹)", min_value=0.0, value=None, placeholder="0.00")
             phone = st.text_input("Phone Number (Leave blank if paid)")
+            date_input = st.date_input("Date", datetime.today())
+            date_str = date_input.strftime('%Y-%m-%d') 
             
         submitted = st.form_submit_button("Save Entry", type="primary", use_container_width=True)
         
         if submitted:
             clean_phone = phone.replace(" ", "").replace("-", "").replace("+", "")
             final_qty = qty if qty is not None else 1
+            final_cust_name = cust_name.strip() if cust_name.strip() != "" else "Walk-in Customer"
             
             if not name:
                 st.error("Item Name is required.")
@@ -165,6 +186,7 @@ elif current_tab == "➕ Add Entry":
                 new_row = {
                     'hidden_id': str(uuid.uuid4()), 
                     'Date': date_str, 
+                    'Customer Name': final_cust_name,
                     'Name': name, 
                     'Qty': final_qty, 
                     'Total Price': total_price, 
@@ -177,7 +199,7 @@ elif current_tab == "➕ Add Entry":
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(df)
                 
-                st.session_state.flash_success = f"Added {final_qty}x '{name}' successfully! Saved to Google Sheets."
+                st.session_state.flash_success = f"Added {final_qty}x '{name}' for '{final_cust_name}' successfully!"
                 st.rerun()
 
 # --- TAB 3: SEARCH ---
@@ -185,10 +207,11 @@ elif current_tab == "🔍 Search":
     st.header("Search Database")
     df = get_data()
     
-    search_term = st.text_input("Type to search by Name, Date (YYYY-MM-DD), or Phone:")
+    search_term = st.text_input("Type to search by Customer Name, Item Name, Date (YYYY-MM-DD), or Phone:")
     
     if search_term and not df.empty:
         mask = (
+            df['Customer Name'].astype(str).str.contains(search_term, case=False, na=False) | 
             df['Name'].astype(str).str.contains(search_term, case=False, na=False) | 
             df['Phone'].astype(str).str.contains(search_term, case=False, na=False) |
             df['Date'].astype(str).str.contains(search_term, case=False, na=False)
@@ -216,7 +239,7 @@ elif current_tab == "✏️ Edit / Delete":
         edit_options_dict = {}
         for _, row in df_sorted.iterrows():
             phone_display = row['Phone'] if str(row['Phone']).strip() != '' else 'N/A'
-            label = f"{row['Date']} | {row['Name']} | Qty: {row['Qty']} | Phone: {phone_display}"
+            label = f"{row['Date']} | Customer: {row['Customer Name']} | {row['Name']} | Phone: {phone_display}"
             edit_options_dict[label] = row['hidden_id']
         
         selected_edit = st.selectbox(
@@ -230,7 +253,8 @@ elif current_tab == "✏️ Edit / Delete":
             
             with st.form("edit_delete_form"):
                 st.write("### Edit Entry Details")
-                new_name = st.text_input("Name", value=row_data['Name'])
+                new_cust_name = st.text_input("Customer Name", value=row_data['Customer Name'])
+                new_name = st.text_input("Item Name", value=row_data['Name'])
                 new_qty = st.number_input("Qty", min_value=1, value=int(row_data['Qty']))
                 new_total = st.number_input("Total Price (₹)", min_value=0.0, value=float(row_data['Total Price']))
                 new_phone = st.text_input("Phone", value=row_data['Phone'])
@@ -247,6 +271,7 @@ elif current_tab == "✏️ Edit / Delete":
                     if clean_phone_edit != "" and not clean_phone_edit.isdigit():
                         st.error("Invalid Phone Number: Please enter numbers only.")
                     else:
+                        df.loc[df['hidden_id'] == target_id, 'Customer Name'] = new_cust_name
                         df.loc[df['hidden_id'] == target_id, 'Name'] = new_name
                         df.loc[df['hidden_id'] == target_id, 'Qty'] = new_qty
                         df.loc[df['hidden_id'] == target_id, 'Total Price'] = new_total
@@ -255,9 +280,9 @@ elif current_tab == "✏️ Edit / Delete":
                         df.loc[df['hidden_id'] == target_id, 'Status'] = 'Borrowed' if str(new_phone).strip() != "" else 'Paid'
                         
                         save_data(df)
-                        st.session_state.flash_success = f"Entry for '{new_name}' updated in Google Sheets!"
+                        st.session_state.flash_success = f"Entry for '{new_cust_name}' updated successfully!"
                         st.rerun()
-                    
+                        
                 if delete_btn:
                     df = df[df['hidden_id'] != target_id]
                     save_data(df)
